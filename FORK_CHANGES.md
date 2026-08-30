@@ -113,6 +113,18 @@
 
 ## 6. 构建注意事项（实测坑）
 
+### 6.0 升级到 0.1.2-alpha.1 的两个行为变化（2026-08-30 部署实录）
+
+- **凭据文件权限 fail-closed**：新版 `credentials-local` 启动时断言 `/root/.dsh/.credentials.yaml`
+  必须仅 owner 可读（mode 600），否则**拒绝启动**（崩溃循环，日志关键词
+  `is readable beyond its owner (mode 705)`）。宿主 bind 目录权限透传容器——修复：
+  `docker exec deepseek-harness-dsh chmod 600 /root/.dsh/.credentials.yaml` 后重启。
+- **上游新增原生 token 认证**：`dsh web` 启动即生成一次性 token，Web 全部路由 401 直到
+  浏览器以 `/?token=<t>` 访问一次（URL 打印在容器日志：`docker logs deepseek-harness-dsh |
+  grep "dsh web:"`）。这正是 §4 预言的「上游原生认证层」方向——**保留它，不找关闭项**，
+  fork 的 settings 放行模型叠加在真认证之上更安全。caddy TLS 链路上 token 参数透传正常
+  （实测 302 引导）。
+
 - **构建需 `.git`**：`scripts/build.ts` 通过 `git rev-parse HEAD` 嵌入源码 commit 到前端
   产物（`DSH_CLIENT_COMMIT_HASH`）。`.dockerignore` 不能排除 `.git`，Dockerfile 需
   `COPY .git .git`。
