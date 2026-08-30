@@ -12,7 +12,8 @@
  * Export discipline: packages/client/AGENTS.md.
  */
 import type { Context } from '@deepseek-ai/cordis'
-import type { ConnectionHandle } from '@deepseek-ai/dsh-api-remotes/client'
+// FORK: ConnectionHandle import dropped — the connection handle is no longer read
+// in this file (host persistence is forced; see the FORK note in apply()).
 // Type-only service merge for the connection lifecycle event.
 import type {} from '@deepseek-ai/dsh-client-connection/client'
 // Type-only pair supplying `$on` and its key face without dragging a build
@@ -53,11 +54,18 @@ export const inject = ['connection', 'remote', 'remote.settings']
  */
 export function apply(ctx: Context): void {
   const schema = new SettingsSchemaService(ctx)
-  const connection = ctx.get('connection') as ConnectionHandle
+  // FORK: the `connection` handle is no longer read here — we force 'host' persistence
+  // below instead of branching on connection.isLoopback. The service stays in `inject`
+  // so the connection/reset event subscription below keeps its lifecycle binding.
   // Captured once here, where `remote.settings` is declared in this plugin's
   // own `inject`; the binder hands the same face to every scope it binds.
   const wire = { settings: ctx.remote.settings }
-  const mirror = new SettingsDescribeMirror(wire, connection.isLoopback ? 'host' : 'memory')
+  const mirror = new SettingsDescribeMirror(wire,
+    // FORK: force 'host' persistence so the settings mirror issues settings.describe
+    // even from a non-loopback address bar (LAN IP). Upstream uses
+    // `connection.isLoopback ? 'host' : 'memory'`, which disables the settings
+    // pages ("settings are unavailable in this browser") on LAN access. See FORK_CHANGES.md.
+    'host')
   ctx.effect(() => {
     const disposers = [
       ctx.remote.$on('settings/document-updated', () => { void mirror.load() }),

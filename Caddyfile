@@ -1,0 +1,28 @@
+# Caddyfile — DeepSeek Harness fork
+#
+# Terminates TLS in front of the dsh container and reverse-proxies over the
+# docker internal network. dsh itself stays bound to its default port but
+# no longer accepts host traffic directly.
+#
+# TLS certs are minted by a one-shot init container (cert_init) using
+# openssl with both trusted-host IPs in the SAN. Browser will warn once
+# (self-signed, not trusted CA) and let the user proceed.
+
+{
+    admin off
+}
+
+# HTTPS entry — explicit self-signed cert (SAN = both trusted IPs)
+:443 {
+    tls /data/cert.pem /data/key.pem
+    # Upstream is the dsh-passwords auth gateway (plain HTTP inside the docker
+    # network, TLS terminated here). Direct dsh:3080 bypasses the login gate.
+    # Container-name form: compose 2.40.3 drops service aliases on recreate.
+    reverse_proxy deepseek-harness-dsh:8080
+}
+
+# HTTP → HTTPS redirect (container-internal only — host port 80 is taken
+# by cloudlink-finder, so we skip the host-side 80 mapping)
+:80 {
+    redir https://{host}{uri} permanent
+}

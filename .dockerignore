@@ -1,0 +1,16 @@
+node_modules
+.github
+.agents
+dist
+build
+*.log
+.env
+.env.*
+backups
+backups/
+*.tmp
+*.bak
+.DS_Store
+coverage
+.vscode
+.idea

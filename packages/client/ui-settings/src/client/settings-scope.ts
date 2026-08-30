@@ -9,7 +9,9 @@
 import { Service } from '@deepseek-ai/cordis'
 import type { Context } from '@deepseek-ai/cordis'
 import type {
-  ConnectionHandle, JsonValue, SettingsNamespaceView, SettingsPathOpView,
+  // FORK: ConnectionHandle dropped — the connection handle is no longer read here
+  // (host persistence is forced; see the FORK note in bind()).
+  JsonValue, SettingsNamespaceView, SettingsPathOpView,
 } from '@deepseek-ai/dsh-api-remotes/client'
 import { createSnapshotStore, type SnapshotStore } from '@deepseek-ai/dsh-client-store'
 // Type-only, and deliberately NOT `@deepseek-ai/dsh-api-remotes/client`: this
@@ -283,12 +285,14 @@ export class SettingsScopeBinder extends Service {
    */
   bind<T>(spec: SettingsScopeSpec<T>): SettingsScope<T> {
     const ctx = this.ctx
-    const connection = ctx.get('connection') as ConnectionHandle
     const controller = new SettingsScopeController<T>(
       this.wire,
       spec,
       this.mirror,
-      connection.isLoopback ? 'host' : 'memory',
+      // FORK: force 'host' persistence so settings scopes (Models, Providers, etc.)
+      // read/write through the host from a LAN address bar. Upstream uses
+      // `connection.isLoopback ? 'host' : 'memory'`. See FORK_CHANGES.md.
+      'host',
       this.schema,
     )
     ctx.effect(() => {

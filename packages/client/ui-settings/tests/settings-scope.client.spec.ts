@@ -537,7 +537,11 @@ describe('SettingsScopeBinder.bind', () => {
     expect(theme.getSnapshot()).toMatchObject({ revision: 1 })
   })
 
-  it('binds a remote browser in memory mode without starting a settings read', async () => {
+  // FORK: skipped — upstream asserts the off-loopback 'memory' persistence semantics,
+  // which this fork deliberately replaces with forced 'host' persistence (see the FORK
+  // note in src/client/settings-scope.ts and FORK_CHANGES.md §3). Re-enable if upstream
+  // later provides a native multi-user/auth layer that supersedes the fork patch.
+  it.skip('binds a remote browser in memory mode without starting a settings read', async () => {
     const describeCall = vi.fn()
     const wire = { settings: { describe: describeCall } }
     const mirror = new SettingsDescribeMirror(wire as never, 'memory')

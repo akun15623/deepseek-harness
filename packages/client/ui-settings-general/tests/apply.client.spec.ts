@@ -165,7 +165,9 @@ describe('ui-settings-general apply', () => {
     await vi.waitFor(() => { expect(b.settingsDescribe).toHaveBeenCalledTimes(2) })
   })
 
-  it('withholds the Host document action off-loopback', async () => {
+  // FORK: skipped — asserts the off-loopback withhold semantics that this fork
+  // deliberately replaces (forced 'host' settings persistence; see FORK_CHANGES.md §3).
+  it.skip('withholds the Host document action off-loopback', async () => {
     const b = await bench(false)
     declare(b.slots)
     const fiber = b.ctx.plugin({ inject: [...inject], apply })

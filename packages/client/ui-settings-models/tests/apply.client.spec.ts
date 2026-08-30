@@ -189,7 +189,9 @@ describe('ui-settings-models apply', () => {
     expect(() => b.locale.register('settings.models', 'en', {})).not.toThrow()
   })
 
-  it('keeps remote-browser acknowledgement in process memory', async () => {
+  // FORK: skipped — asserts the off-loopback 'memory' acknowledgement semantics that
+  // this fork deliberately replaces (forced 'host' persistence; see FORK_CHANGES.md §3).
+  it.skip('keeps remote-browser acknowledgement in process memory', async () => {
     const b = await bench(false)
     declare(b.slots)
     await b.ctx.plugin({ inject: [...inject], apply }).await()
