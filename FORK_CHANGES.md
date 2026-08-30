@@ -9,7 +9,7 @@
 |---|---|
 | 上游官方仓库 | `git@github.com:deepseek-ai/deepseek-harness.git` |
 | fork 仓库（origin） | `git@github.com:akun15623/deepseek-harness.git` |
-| 基线提交（fork 起点） | `b150a551b8` — Merge pull request #2908 (release/dsh-0.1.1-rc.2) |
+| 基线提交（fork 起点） | `cd5ef81481` — Merge pull request #3248 (release/dsh-0.1.2-alpha.1)；上一基线 `b150a551b8`（0.1.1-rc.2）。2026-08-30 同步跨越上游 1079 个 commit（code-mode→ptc 大重命名），采用「重构式同步」（见 §5.1） |
 | 本地分支策略 | 双分支：`master` = 上游纯净镜像（可 ff 同步）；全部改动提交在 `custom` 分支（见 §5） |
 
 > 本项目采用「双分支」策略：`master` 保持上游纯净镜像（仅上游源码，用于 `ff` 同步），
@@ -48,9 +48,9 @@
 
 | 文件 | 改动 | 目的 |
 |---|---|---|
-| `packages/client/connection/src/index.ts` | 特权方法（`settings.*`/`credentials.*`/`host.pickDirectory`/`llm.discoverModels`）的 trust fence 从 `isTrustedApiRequest(request, [])`（空信任表=仅 loopback）改为 `isTrustedApiRequest(request, trustedHosts)` | 后端放行 settings/credentials 平面，跟随 `--trusted-host` 配置，LAN 访问不再 403 |
-| `packages/client/ui-settings/src/client/index.ts` | `SettingsDescribeMirror` 的 persistence 从 `connection.isLoopback ? 'host' : 'memory'` 改为恒 `'host'` | 前端 settings mirror 主动发 `settings.describe`，不再因「非 loopback 地址栏」禁用 |
-| `packages/client/ui-settings/src/client/settings-scope.ts` | `SettingsScopeController` 的 persistence 同上改为恒 `'host'` | 同上，作用于 Models/Providers 等具体 scope |
+| ~~`packages/client/connection/src/index.ts`~~ | **已删除（2026-08-30）**：上游 0.1.2-alpha.1 把 Host/Origin fence 统一重构为 `RpcHost`（`rpc-host.ts`）——**所有** RPC（含 `settings.*`/`credentials.*`）统一按配置的 `trustedHosts` 判定，特权面单独锁 loopback 的旧语义不复存在 | 上游已原生等效实现本 patch 的效果，按 §5.3 纪律删除 fork 改动 |
+| `packages/client/ui-settings/src/client/index.ts` | `SettingsDescribeMirror` 的 persistence 从 `connection.isLoopback ? 'host' : 'memory'` 改为恒 `'host'`（apply() 内 `wire` 行旁） | 前端 settings mirror 主动发 `settings.describe`，不再因「非 loopback 地址栏」禁用 |
+| `packages/client/ui-settings/src/client/settings-scope.ts` | `SettingsScopeBinder.bind()` 的 persistence 同上改为恒 `'host'`（`connection` 局部变量与 `ConnectionHandle` import 随之移除） | 同上，作用于 Models/Providers 等具体 scope |
 
 ### Docker 部署文件（新增）
 
@@ -81,6 +81,29 @@
   --rm cert_init` 然后清 caddy_data 旧 cert 再 `docker restart deepseek-harness-caddy`）。
 
 ## 5. 同步上游流程
+
+### 5.1 重构式同步（大跨度更新时优先，2026-08-30 实战沉淀）
+
+跨越大量上游 commit（本次 1079 个、含 code-mode→ptc 全局重命名）时，**不要逐 commit
+`git rebase master`**：fork 中间态 commit（如已废弃的 DSH_PASSWORD 门禁、上游已删除的
+`web-api-client.ts` 改动）会在重放时产生大量无意义冲突，且上游大重构（文件删除/搬迁/改名）
+让中间态解冲突纯浪费。改用「重构式同步」：
+
+1. `master` ff 至上游最新并推 origin；**旧 `custom` 打本地备份分支**（如 `custom-0.1.1-backup`）。
+2. `git checkout -B custom master`，从旧 custom 分支 `git checkout custom-<backup> -- <部署文件>` 整体搬回
+   （上游不碰的文件直接复用最终态）。
+3. 逐个核对源码 `// FORK:` patch 在上游新版的位置：上游已原生实现的 patch **直接删除**（本次
+   connection fence 就是——上游统一 RpcHost fence 等效实现）；仍需要的 patch 按**新版结构**重新叠加
+   （ mirror 构造签名从 `connection.api` 变 `wire`，叠加处随之调整；随之失效的局部变量/import 一并清理）。
+4. 断言旧 fork 语义的上游测试改 `it.skip` + `// FORK:` 注释（本次 3 个，见各 spec 文件）。
+5. `pnpm install --frozen-lockfile` + `pnpm run clean`（**必须 clean**：陈旧 `lib/types` 产物会触发
+   tsdown MISSING_EXPORT 假错误）+ `pnpm run typecheck` + 相关包 `pnpm test`。
+6. `git push --force-with-lease origin custom`。
+
+> 已知基线：本环境 vitest 有 10 个 `*.client.spec.tsx` 测试文件在干净 master 上也失败
+> （agent 容器环境性失败，与 fork 无关）。判据：`git stash` 后跑同一命令对照。
+
+### 5.2 常规同步流程（小跨度）
 
 1. 切到 `master`，`git fetch upstream && git merge --ff-only upstream/master`（纯净镜像）。
 2. 切回 `custom`，`git rebase master`（本地改动重叠加到最新上游）。
