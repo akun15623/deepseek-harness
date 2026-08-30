@@ -10,7 +10,12 @@ services:
     # (NOT from DSH_TRUSTED_HOSTS env). Pass the LAN/public authority explicitly
     # so the /api trust fence accepts http://<LAN-IP>:3080 and http://<PUBLIC-IP>:3080.
     # Host values live in .env (gitignored) — do not hardcode IPs here.
-    command: ["node", "apps/cli/lib/bin.js", "web", "--trusted-host", "${DSH_TRUSTED_HOST_LAN}", "--trusted-host", "${DSH_TRUSTED_HOST_PUBLIC}", "--trusted-host", "${DSH_TRUSTED_HOST_DOMAIN}", "--no-open"]
+    # FORK: credentials-local (0.1.2+) rewrites /root/.dsh/.credentials.yaml
+    # atomically on boot; on this NAS the freshly created file lands as mode
+    # 705, which the NEXT boot's owner-only assertion then rejects (crash loop,
+    # FORK_CHANGES §6.0). Pre-chmod before every start so the file is always
+    # owner-only. `|| true` tolerates a fresh home with no credentials yet.
+    command: ["sh", "-c", "chmod 600 /root/.dsh/.credentials.yaml 2>/dev/null || true; exec node apps/cli/lib/bin.js web --trusted-host ${DSH_TRUSTED_HOST_LAN} --trusted-host ${DSH_TRUSTED_HOST_PUBLIC} --trusted-host ${DSH_TRUSTED_HOST_DOMAIN} --no-open"]
     environment:
       NODE_ENV: production
       # FORK: override dsh-market's bundled npm mirror (which is hardcoded to
@@ -24,17 +29,6 @@ services:
       # (unavailable inside the container) so backup will surface a token-required
       # error if unset. Keep .env out of git.
       DSH_GITHUB_TOKEN: "${DSH_GITHUB_TOKEN:-}"
-      # FORK: dsh-passwords 插件的安装密钥（JWT 派生种子，fail-closed——缺省插件拒载）。
-      # 值用 `openssl rand -hex 32` 生成后填进 .env；首次激活后浏览器按插件引导设置
-      # 管理员密码。不上 git。
-      SETUP_KEY: "${SETUP_KEY:-}"
-      # FORK: 网关以明文 HTTP 跑在容器内 8080，TLS 由外层 Caddy 终止（与 Caddy→dsh:3080
-      # 同一信任边界，容器网络不出宿主）。插件的自动 HTTPS（Let's Encrypt）在此拓扑
-      # 不可用：宿主 80/443 被 NAS 系统占用、无 ACME 可达入口，签发失败会让密码门整体
-      # 拒启（错误码 30）。PUBLIC_HOST 固定为对外域名防 Host 反射。
-      MCP_GATEWAY_AUTO_TLS: "0"
-      MCP_GATEWAY_PORT: "8080"
-      MCP_GATEWAY_PUBLIC_HOST: "dsh.akun15623.eu.cc:3080"
     # dsh no longer publishes a host port — Caddy terminates TLS and reverse-
     # proxies into the docker network. Only the caddy container is reachable
     # from outside.

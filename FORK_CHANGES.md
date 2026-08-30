@@ -57,7 +57,7 @@
 | 文件 | 状态 | 说明 |
 |---|---|---|
 | `Dockerfile` | 新增 | 多阶段构建：build 阶段 `pnpm install --frozen-lockfile` + `pnpm run build`，再安装社区插件 `dsh-lan-access`（randomUUID polyfill）；runtime 阶段 `corepack prepare pnpm@11.7.0`（runtime 装插件用）+ `COPY --from=build /app /app` + `cp -a /app/.dsh/. /root/.dsh/` 把构建期 profile 拷贝到卷路径 + `ENV DSH_HOME=/root/.dsh`（指向 compose 挂的命名卷 `dsh-home`，runtime 装的插件持久化）。registry 用 `registry.npmmirror.com`。基础镜像 `mcr.microsoft.com/devcontainers/javascript-node:22-bookworm`。 |
-| `docker-compose.yml` | 新增 | 三服务：`dsh`（绑 127.0.0.1:3080，`--trusted-host` 传 LAN IP + 公网 IP + 域名，来自 `.env` gitignored；`DSHM_NPM_MIRROR=https://registry.npmmirror.com` 让 dsh-market 把 npm 包安装路由到 npmmirror——其默认 china region 用的是 `mirrors.cloud.tencent.com/npm`，多数网络下慢；`DSH_GITHUB_TOKEN` 来自 `.env`，供 dsh-market 的 Gist 备份读取，留空走 `gh auth token` 兜底；`SETUP_KEY` 来自 `.env`，dsh-passwords 插件的 JWT 派生种子）、`cert_init`（一次性容器，自签证书 SAN=`DNS:<域名>,IP:<LAN>,IP:<公网>`，alpine 源切 aliyun）、`caddy`（宿主 `3080:443` 反代 TLS，无宿主 80 映射——被 NAS 系统占用）。healthcheck 判定放宽为「仅 5xx/无响应算不健康」——401（密码门禁拦未认证探针）与 404（插件移除后的端点）是预期形态。**2026-08-27 起全部持久化走 NAS bind 目录**（原 4 个命名卷见 §6「fnOS 删卷事件」）：`/vol1/1000/appData/deepseek-harness/.dsh→/root/.dsh`、`.../_data→/root/data`、`.../caddy/data→caddy:/data`、`.../caddy/config→caddy:/config`；dsh 侧另有 fnOS 面板手工加入并已固化的三项挂载（`agent-common→/root/agent-common`、`agent-common-env/ssh-key(agent-hermes)→/root/.ssh`、`docker.sock→/var/run/docker.sock`）。**宿主路径统一从 `.env` 的 `HOST_APP_DATA`（NAS 视角数据根，默认 `/vol1/1000/appData`）读取**，迁移宿主只改 `.env` 一处；`docker.sock` 为系统固定路径不参数化。 |
+| `docker-compose.yml` | 新增 | 三服务：`dsh`（绑 127.0.0.1:3080，`--trusted-host` 传 LAN IP + 公网 IP + 域名，来自 `.env` gitignored；`DSHM_NPM_MIRROR=https://registry.npmmirror.com` 让 dsh-market 把 npm 包安装路由到 npmmirror——其默认 china region 用的是 `mirrors.cloud.tencent.com/npm`，多数网络下慢；`DSH_GITHUB_TOKEN` 来自 `.env`，供 dsh-market 的 Gist 备份读取，留空走 `gh auth token` 兜底；command 前置 `chmod 600 /root/.dsh/.credentials.yaml`（凭据权限 fail-closed 根治，见 §6.0））、`cert_init`（一次性容器，自签证书 SAN=`DNS:<域名>,IP:<LAN>,IP:<公网>`，alpine 源切 aliyun）、`caddy`（宿主 `3080:443` 反代 TLS，无宿主 80 映射——被 NAS 系统占用）。healthcheck 判定放宽为「仅 5xx/无响应算不健康」——401（密码门禁拦未认证探针）与 404（插件移除后的端点）是预期形态。**2026-08-27 起全部持久化走 NAS bind 目录**（原 4 个命名卷见 §6「fnOS 删卷事件」）：`/vol1/1000/appData/deepseek-harness/.dsh→/root/.dsh`、`.../_data→/root/data`、`.../caddy/data→caddy:/data`、`.../caddy/config→caddy:/config`；dsh 侧另有 fnOS 面板手工加入并已固化的三项挂载（`agent-common→/root/agent-common`、`agent-common-env/ssh-key(agent-hermes)→/root/.ssh`、`docker.sock→/var/run/docker.sock`）。**宿主路径统一从 `.env` 的 `HOST_APP_DATA`（NAS 视角数据根，默认 `/vol1/1000/appData`）读取**，迁移宿主只改 `.env` 一处；`docker.sock` 为系统固定路径不参数化。 |
 | `.dockerignore` | 新增 | 排除 `node_modules`/构建产物，但保留 `.git`（build 阶段 `git rev-parse HEAD` 嵌入源码 commit）。 |
 
 ## 4. 安全权衡（重要）
@@ -113,17 +113,32 @@
 
 ## 6. 构建注意事项（实测坑）
 
-### 6.0 升级到 0.1.2-alpha.1 的两个行为变化（2026-08-30 部署实录）
+### 6.0 升级到 0.1.2-alpha.1 的行为变化与迁移（2026-08-30 部署实录）
 
-- **凭据文件权限 fail-closed**：新版 `credentials-local` 启动时断言 `/root/.dsh/.credentials.yaml`
-  必须仅 owner 可读（mode 600），否则**拒绝启动**（崩溃循环，日志关键词
-  `is readable beyond its owner (mode 705)`）。宿主 bind 目录权限透传容器——修复：
-  `docker exec deepseek-harness-dsh chmod 600 /root/.dsh/.credentials.yaml` 后重启。
-- **上游新增原生 token 认证**：`dsh web` 启动即生成一次性 token，Web 全部路由 401 直到
-  浏览器以 `/?token=<t>` 访问一次（URL 打印在容器日志：`docker logs deepseek-harness-dsh |
-  grep "dsh web:"`）。这正是 §4 预言的「上游原生认证层」方向——**保留它，不找关闭项**，
-  fork 的 settings 放行模型叠加在真认证之上更安全。caddy TLS 链路上 token 参数透传正常
-  （实测 302 引导）。
+- **凭据文件权限 fail-closed（结构性坑，已固化进 compose command）**：新版
+  `credentials-local` 启动时断言 `/root/.dsh/.credentials.yaml` 必须仅 owner 可读（mode
+  600），否则**拒绝启动**（崩溃循环，日志关键词 `is readable beyond its owner (mode 705)`）。
+  根因：该插件每次启动**原子重写**该文件（临时文件+rename），本 NAS 文件系统给新建文件的
+  模式是 705——即每次启动都会把**下次**启动搞崩，`docker exec chmod 600` 只是治标。
+  已在 compose 的 dsh 服务 command 前置 `chmod 600 ... || true`（启动即修，容忍全新
+  home 无凭据文件）。
+- **上游新增原生 token 认证（BrowserAuth，`packages/client/connection/src/browser-auth.ts`，
+  2026-08-25 引入）**：两类凭据分离——launch token（每次启动随机 32B、只存内存、重启即换、
+  进程存活期可重复用）+ 签名密钥（持久化于 `.credentials.yaml` records，HMAC-SHA256 给
+  cookie 签名）。登录流：`GET /?token=<t>` → timing-safe 比对 → 303 到干净 `/` +
+  `Set-Cookie: dsh-auth-<sha256(authority)>`（HttpOnly、SameSite=Strict、Max-Age 默认
+  30 天 `cookieMaxAgeDays`）。cookie 与 authority（Host）绑定——换域名/IP 入口需各自
+  登录一次。`/api` 双门（rpc-host.ts `requestRejection`）：trustedHosts fence（403）
+  **且** cookie 认证（401）；无关闭项。这正是 §4 预言的「上游原生认证层」方向。
+- **dsh-passwords 旧密码门禁拆除（2026-08-30）**：0.1.2 部署验证时发现 caddy upstream
+  仍指 dsh 容器 8080 的 `dsh-passwords serve-gateway`（DSH_PASSWORD 时代残留，随 web
+  profile 启动，`/gateway/login`「登录 · DeepSeek Harness」登录页截流，与上游原生认证
+  叠成双门——曾误判「caddy 链路 302 引导正常」，实为门禁重定向）。按 §4 既定方向迁移到
+  上游原生认证：Caddyfile upstream 改 `deepseek-harness-dsh:3080`；profile
+  `package.json` 删 `dsh-passwords`（dependencies + `dsh.profile.bundles` 两处，
+  node_modules 留存无害）；compose 删 `SETUP_KEY` + `MCP_GATEWAY_AUTO_TLS/PORT/PUBLIC_HOST`；
+  `.env` 删 `SETUP_KEY`。验证：无凭证 401 BrowserAuth 文本 → 带 token 303+Set-Cookie →
+  仅 cookie 200 SPA；`/api` 无凭证 403；容器内无 8080 监听、无 serve-gateway 进程。
 
 - **构建需 `.git`**：`scripts/build.ts` 通过 `git rev-parse HEAD` 嵌入源码 commit 到前端
   产物（`DSH_CLIENT_COMMIT_HASH`）。`.dockerignore` 不能排除 `.git`，Dockerfile 需
@@ -203,5 +218,5 @@
 |---|---|---|
 | `dsh-lan-access@^0.1.3` | 构建期装入镜像（bind 目录为空时首次启动后需重装） | 兼容层（randomUUID polyfill + 原 0.0.0.0 绑定），HTTPS 域名 + Caddy 反代后冗余但保留以防回退 |
 | `dshmarket@^1.31.1` | runtime 装入 bind 目录 | 官方社区插件市场：Settings → Plugin Market 标签，浏览/一键装 1500+ 社区插件、主题、备份/恢复、版本更新诊断。GitHub https://github.com/dsh-market/dsh-market（npm `dshmarket`）。 |
-| `dsh-passwords@^2.6.3` | runtime 装入 bind 目录（插件市场） | 多租户密码网关（**独立网关架构**：自己监听端口转发 dsh，非进程内中间件）。`.env` 的 `SETUP_KEY`（JWT 派生种子，`openssl rand -hex 32`）缺省即拒载；**compose 注入 `MCP_GATEWAY_AUTO_TLS=0` + `MCP_GATEWAY_PORT=8080` 以明文网关运行**——其自动 HTTPS（Let's Encrypt）在本拓扑不可用（宿主 80/443 被 NAS 占、无 ACME 入口，错误码 30 拒启），TLS 由外层 Caddy 终止，Caddyfile upstream 已切 `deepseek-harness-dsh:8080`（直连 3080 会绕过门禁）。`MCP_GATEWAY_PUBLIC_HOST=dsh.akun15623.eu.cc:3080` 防 Host 反射。未认证访问 302 → `/gateway/login`，首次访问用 SETUP_KEY 引导创建主用户。 |
+| `dsh-passwords@^2.6.3` | 已卸载（2026-08-30，profile bundles + dependencies 移除） | 多租户密码网关（独立网关架构，监听容器内 8080 反代 dsh）。DSH_PASSWORD 门禁时代的认证层；上游 0.1.2-alpha.1 原生 BrowserAuth 上线后按 §4 既定方向拆除，部署残留（SETUP_KEY、MCP_GATEWAY_* env、Caddyfile upstream 8080、`.env` SETUP_KEY）一并清理，详见 §6.0。 |
 | `dsh-auth-gate@^0.9.1` | 已卸载（2026-08-27） | 轻量认证门禁，与 dsh-passwords 功能重叠（两者同装时 gate 拦 401 而 passwords 未激活，处于半激活不一致态），保留 passwords 卸载本插件。 |

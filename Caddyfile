@@ -15,10 +15,12 @@
 # HTTPS entry — explicit self-signed cert (SAN = both trusted IPs)
 :443 {
     tls /data/cert.pem /data/key.pem
-    # Upstream is the dsh-passwords auth gateway (plain HTTP inside the docker
-    # network, TLS terminated here). Direct dsh:3080 bypasses the login gate.
+    # Upstream is dsh itself on 3080. Since upstream 0.1.2-alpha.1 dsh
+    # natively authenticates the browser (launch token → 30-day signed
+    # cookie, see FORK_CHANGES §6.0), so the old dsh-passwords gateway on
+    # 8080 was removed. Plain HTTP inside the docker network, TLS here.
     # Container-name form: compose 2.40.3 drops service aliases on recreate.
-    reverse_proxy deepseek-harness-dsh:8080
+    reverse_proxy deepseek-harness-dsh:3080
 }
 
 # HTTP → HTTPS redirect (container-internal only — host port 80 is taken
