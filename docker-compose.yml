@@ -5,6 +5,10 @@ services:
       dockerfile: Dockerfile
     image: deepseek-harness:official
     container_name: deepseek-harness-dsh
+    # FORK 2026-08-31: 与 caddy 共享网络命名空间——task-board 插件的宿主路由
+    # 守卫要求到达 socket 必须是回环(同机反代设计), 跨容器网桥 IP 会被它 403。
+    # caddy 成为该 netns 的 owner, dsh 挂进去后 caddy 上游即可走 127.0.0.1。
+    network_mode: "service:caddy"
     restart: unless-stopped
     # Upstream CLI reads trustedHosts ONLY from cordis.yml or --trusted-host
     # (NOT from DSH_TRUSTED_HOSTS env). Pass the LAN/public authority explicitly
@@ -29,11 +33,13 @@ services:
       # (unavailable inside the container) so backup will surface a token-required
       # error if unset. Keep .env out of git.
       DSH_GITHUB_TOKEN: "${DSH_GITHUB_TOKEN:-}"
+      # FORK 2026-08-31: task-board 插件的回环反代 token (README: proxyTokenEnv)。
+      # 值在 .env, 不入库; caddy 用同一值注入 X-Dsh-Task-Board-Proxy-Token。
+      DSH_TASK_BOARD_PROXY_TOKEN: "${DSH_TASK_BOARD_PROXY_TOKEN:-}"
     # dsh no longer publishes a host port — Caddy terminates TLS and reverse-
     # proxies into the docker network. Only the caddy container is reachable
-    # from outside.
-    expose:
-      - "3080"
+    # from outside. FORK 2026-08-31: expose 也一并移除 — network_mode 容器共享
+    # 模式下不允许 expose (与端口暴露互斥)。
     volumes:
       # 宿主路径统一从 .env 的 HOST_APP_DATA 读取（NAS 视角根目录），
       # 迁移宿主只改 .env 一个值。docker.sock 是固定系统路径，不参数化。
@@ -60,6 +66,12 @@ services:
   # One-shot init container: mint a self-signed cert with both trusted-host
   # IPs in the SAN, persist it to the NAS-side caddy data dir. Runs once per
   # fresh dir; subsequent restarts are no-ops.
+    depends_on:
+      caddy:
+        condition: service_started
+      cert_init:
+        condition: service_completed_successfully
+
   cert_init:
     image: alpine:3.20
     container_name: deepseek-harness-cert-init
@@ -92,6 +104,9 @@ services:
     image: caddy:2
     container_name: deepseek-harness-caddy
     restart: unless-stopped
+    # FORK 2026-08-31: Caddyfile header_up 用 {env.*} 注入 task-board 代理 token
+    environment:
+      DSH_TASK_BOARD_PROXY_TOKEN: "${DSH_TASK_BOARD_PROXY_TOKEN:-}"
     # Only the reverse proxy is reachable from outside the docker network.
     # Host port 3080 maps to container 443 (HTTPS). Users keep using port 3080
     # in their browser — only the scheme changes from http:// to https://.
@@ -110,8 +125,6 @@ services:
       - ${HOST_APP_DATA}/deepseek-harness/caddy/data:/data
       - ${HOST_APP_DATA}/deepseek-harness/caddy/config:/config
     depends_on:
-      dsh:
-        condition: service_started
       cert_init:
         condition: service_completed_successfully
 

@@ -20,7 +20,11 @@
     # cookie, see FORK_CHANGES §6.0), so the old dsh-passwords gateway on
     # 8080 was removed. Plain HTTP inside the docker network, TLS here.
     # Container-name form: compose 2.40.3 drops service aliases on recreate.
-    reverse_proxy deepseek-harness-dsh:3080
+    # FORK 2026-08-31: dsh 与本容器共享 netns (compose network_mode), 上游走回环;
+    # task-board 插件要求反代注入(替换)代理 token, 值来自 .env 同名变量。
+    reverse_proxy 127.0.0.1:3080 {
+        header_up X-Dsh-Task-Board-Proxy-Token "{env.DSH_TASK_BOARD_PROXY_TOKEN}"
+    }
 }
 
 # HTTP → HTTPS redirect (container-internal only — host port 80 is taken

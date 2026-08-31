@@ -223,3 +223,35 @@
 | `@linxin666/dsh-client-ui-task-board` | **0.3.10 在装**（2026-08-31，`pnpm add -E` 固定版本 + bundles 加入；0.3.6 曾装即卸） | 0.3.6 与 @neystan 套件同根因（inject 引用已移除的 `dsh-client-runtime`，构建目标 0.1.1-rc.2），秒报 missed the module table。0.3.10 为作者当日发布的适配版（`engines.dsh: >=0.1.2-alpha.1`）；实测其 `lib/client.js` 仅 require `react`/`react/jsx-runtime`/`react-dom/client` 三个平台种子词，其余依赖全打进 bundle；inject 目标（connection/ui-settings/ui-renderer/api-session-controller/api-workspace-controller/api-remotes）在部署树均存在；宿主启动日志零报错。 |
 | `dsh-passwords@^2.6.3` | 已卸载（2026-08-30，profile bundles + dependencies 移除） | 多租户密码网关（独立网关架构，监听容器内 8080 反代 dsh）。DSH_PASSWORD 门禁时代的认证层；上游 0.1.2-alpha.1 原生 BrowserAuth 上线后按 §4 既定方向拆除，部署残留（SETUP_KEY、MCP_GATEWAY_* env、Caddyfile upstream 8080、`.env` SETUP_KEY）一并清理，详见 §6.0。 |
 | `dsh-auth-gate@^0.9.1` | 已卸载（2026-08-27） | 轻量认证门禁，与 dsh-passwords 功能重叠（两者同装时 gate 拦 401 而 passwords 未激活，处于半激活不一致态），保留 passwords 卸载本插件。 |
+
+## 8. task-board 插件的回环反代改造（2026-08-31）
+
+`@linxin666/dsh-client-ui-task-board` 的宿主路由用 `ctx.webServer.register` 直挂
+webServer（**不经过** dsh 的 `/api` 栅栏与 BrowserAuth），自带 socket 级守卫
+`isTrustedTaskBoardRequest`：非回环 socket 一律 `403 {"ok":false,"error":"forbidden"}`
+（注意与 dsh 栅栏的纯文本 `forbidden` 区分）。本部署 Caddy 与 dsh 分属容器，
+Caddy→dsh 的 socket 是网桥 IP → 浏览器报「Host 操作失败：forbidden 重试连接 Host」。
+
+改造（对齐插件 README 的 same-host authenticated reverse-proxy 设计）：
+
+1. `docker-compose.yml`：`dsh.network_mode: "service:caddy"`（共享 netns，caddy 为
+   owner，dsh 的 `expose` 一并移除——容器网络模式禁止 expose）；dsh 增加
+   `depends_on: caddy + cert_init`，caddy 移除对 dsh 的 depends_on（防循环）。
+2. `Caddyfile`：上游改 `127.0.0.1:3080`，并 `header_up X-Dsh-Task-Board-Proxy-Token
+   "{env.DSH_TASK_BOARD_PROXY_TOKEN}"`（替换式注入；caddy 服务同名 env 来自 .env）。
+3. `.env` 新增 `DSH_TASK_BOARD_PROXY_TOKEN`（64 位 hex；插件经 `proxyTokenEnv`
+   默认名从环境变量读值，token 不进插件配置）。dsh 与 caddy 都需该 env。
+4. profile `cordis.patch.yml`（用户 patch 层）覆盖插件配置：`- id: ui-task-board`
+   `config.trustedProxyHosts: [dsh.akun15623.eu.cc, 192.168.10.6:3080]`
+   （canonical host[:port]，须与浏览器 Origin 的 authority 一致）。
+
+运维注意：
+
+- **caddy 是 netns owner**：重启/重建 caddy 后 dsh 的 netns 被换，必须连着重启
+  dsh；只重启 dsh（装插件等日常操作）不影响 caddy。
+- **Caddyfile 改动必须同步 NAS 侧副本**
+  `/vol1/1000/appData/agent-common/projects/deepseek-harness/Caddyfile`（docker
+  daemon 只看得到那边；本仓库在 agent 容器 LVM 内，daemon 不可见），同步后用
+  `caddy validate --adapter caddyfile` 校验。
+- 插件守卫的 fail-closed 语义保留：无 sec-fetch-site/Origin 标记的裸请求（curl）
+  仍被拒，符合插件安全设计。
